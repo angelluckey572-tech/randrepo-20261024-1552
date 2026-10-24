@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.10-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -6,17 +6,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
-    sudo \
     git \
+    curl \
+    wget \
     ca-certificates \
-    procps \
     && rm -rf /var/lib/apt/lists/*
-
-RUN useradd -m -s /bin/bash go \
-    && echo 'go:go' | chpasswd \
-    && usermod -aG sudo go \
-    && echo 'go ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/go \
-    && chmod 0440 /etc/sudoers.d/go
 
 WORKDIR /app
 
@@ -24,10 +18,6 @@ COPY requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-
-RUN chown -R go:go /app
-
-USER go
 
 EXPOSE 10000
 

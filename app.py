@@ -43,7 +43,7 @@ def _terminal_reader(terminal_id):
             if not child.isalive():
                 break
 
-            data = child.read_nonblocking(size=8192, timeout=0.2)
+            data = child.read_nonblocking(size=16384, timeout=0.2)
             if data:
                 socketio.emit(
                     "terminal_output",
@@ -91,61 +91,21 @@ def handle_clear_terminal(data):
         session["child"].send("clear\r")
 
 
-def run_terminal_sequence(terminal_id, payload):
+def run_command_in_terminal(terminal_id, command):
     child = get_or_create_terminal(terminal_id)
     emit(
         "terminal_output",
-        {
-            "terminal_id": terminal_id,
-            "data": f"\n[Automation started on {terminal_id}] [IP={payload.get('ip', '')}] \n",
-        },
+        {"terminal_id": terminal_id, "data": f"\n[Executing in {terminal_id}] {command}\n"},
         room=terminal_id,
     )
-
     try:
-        child.sendline("sudo rst")
-        time.sleep(4)
-
-        child.sendline("go")
-        time.sleep(4)
-
-        child.sendline(payload["level"])
-        time.sleep(3)
-
-        child.sendline(str(payload["threads"]))
-        time.sleep(2)
-
-        child.sendline(str(payload["sleep"]))
-
-        if payload["level"] == "l4":
-            child.sendline(payload.get("method", "default"))
-
-        child.sendline(str(payload["interval"]))
-        time.sleep(3)
-
-        child.sendline("run")
-        time.sleep(2)
-
-        child.sendline("y")
-        time.sleep(2)
-
-        emit(
-            "terminal_output",
-            {"terminal_id": terminal_id, "data": f"\n[Automation finished on {terminal_id}]\n"},
-            room=terminal_id,
-        )
-
+        child.sendline(command)
     except Exception as exc:
         emit(
             "terminal_output",
-            {"terminal_id": terminal_id, "data": f"\n[Automation error on {terminal_id}: {exc}]\n"},
+            {"terminal_id": terminal_id, "data": f"\n[Command error in {terminal_id}: {exc}]\n"},
             room=terminal_id,
         )
-
-
-def trigger_all_automations(payload):
-    for terminal_id in TERMINAL_IDS:
-        EXECUTOR.submit(run_terminal_sequence, terminal_id, payload)
 
 
 @app.route("/")
@@ -155,16 +115,18 @@ def index():
 
 @app.route("/run-all", methods=["POST"])
 def run_all():
-    payload = {
-        "ip": request.form.get("ip", ""),
-        "level": request.form.get("level", "l7"),
-        "method": request.form.get("method", "default"),
-        "threads": int(request.form.get("threads", 1)),
-        "interval": int(request.form.get("interval", 1)),
-        "sleep": int(request.form.get("sleep", 1)),
-    }
-    trigger_all_automations(payload)
-    return jsonify({"status": "queued", "message": "Automation started across all 3 terminals."})
+    target_ip = request.form.get("ip", "").strip()
+    threads = request.form.get("threads", "1").strip()
+
+    if not target_ip:
+        return jsonify({"status": "error", "message": "IP address is required."}), 400
+
+    command = f"python3 go.py -s {target_ip} -t {threads}"
+
+    for terminal_id in TERMINAL_IDS:
+        EXECUTOR.submit(run_command_in_terminal, terminal_id, command)
+
+    return jsonify({"status": "queued", "message": f"Started across all terminals: {command}"})
 
 
 TEMPLATE = """
@@ -172,19 +134,19 @@ TEMPLATE = """
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Mobile Terminal Dashboard</title>
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
   <style>
     :root {
-      --bg: #07111d;
-      --panel: #111c2d;
-      --panel-2: #16273d;
-      --border: #294160;
-      --text: #eaf2ff;
-      --muted: #a8bddb;
-      --green: #2ed27a;
-      --blue: #4aa7ff;
+      --bg: #08131d;
+      --panel: #101d2d;
+      --panel-2: #162b40;
+      --border: #294666;
+      --text: #edf6ff;
+      --muted: #a9c3df;
+      --accent: #3ad18f;
+      --accent-2: #4ea2ff;
       --shadow: rgba(0,0,0,0.35);
     }
 
@@ -194,8 +156,9 @@ TEMPLATE = """
       margin: 0;
       padding: 0;
       font-family: Arial, sans-serif;
-      background: linear-gradient(180deg, #050d16 0%, var(--bg) 100%);
+      background: linear-gradient(180deg, #050d15 0%, var(--bg) 100%);
       color: var(--text);
+      min-height: 100%;
     }
 
     body {
@@ -203,31 +166,31 @@ TEMPLATE = """
     }
 
     .container {
-      width: min(1500px, 100%);
+      width: min(1400px, 100%);
       margin: 0 auto;
-      padding: 18px 14px 40px;
+      padding: 14px 12px 36px;
     }
 
     .topbar {
-      background: rgba(17, 28, 45, 0.92);
+      background: rgba(16, 29, 45, 0.96);
       border: 1px solid var(--border);
       border-radius: 16px;
+      box-shadow: 0 12px 30px var(--shadow);
       padding: 14px;
-      box-shadow: 0 10px 28px var(--shadow);
       margin-bottom: 16px;
     }
 
     .controls {
       display: grid;
-      grid-template-columns: repeat(7, minmax(110px, 1fr));
-      gap: 10px;
+      grid-template-columns: repeat(3, minmax(140px, 1fr));
+      gap: 12px;
       align-items: end;
     }
 
     .control-group {
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: 8px;
     }
 
     label {
@@ -237,36 +200,24 @@ TEMPLATE = """
       color: var(--muted);
     }
 
-    input, select, button, textarea {
+    input, button {
       width: 100%;
-      border-radius: 10px;
+      min-height: 48px;
+      border-radius: 12px;
       border: 1px solid var(--border);
       background: var(--panel-2);
       color: var(--text);
-      padding: 12px 12px;
-      font-size: 15px;
-    }
-
-    input, select {
-      min-height: 46px;
-    }
-
-    textarea {
-      min-height: 82px;
-      resize: vertical;
-      font-family: Consolas, Monaco, monospace;
-      font-size: 13px;
+      padding: 12px 14px;
+      font-size: 16px;
     }
 
     button {
-      min-height: 46px;
-      background: linear-gradient(135deg, var(--green), #1cad66);
+      background: linear-gradient(135deg, var(--accent), #1ca96a);
       border: none;
-      color: #06150d;
+      color: #07160d;
       font-weight: 700;
-      font-size: 15px;
+      box-shadow: 0 12px 24px rgba(58, 209, 143, 0.25);
       cursor: pointer;
-      box-shadow: 0 12px 24px rgba(46, 210, 122, 0.3);
     }
 
     .terminal-grid {
@@ -276,28 +227,28 @@ TEMPLATE = """
     }
 
     .terminal {
-      background: rgba(17, 28, 45, 0.92);
+      background: rgba(16, 29, 45, 0.96);
       border: 1px solid var(--border);
       border-radius: 16px;
+      box-shadow: 0 10px 24px var(--shadow);
       overflow: hidden;
-      min-height: 500px;
+      min-height: 480px;
       display: flex;
       flex-direction: column;
-      box-shadow: 0 10px 24px var(--shadow);
     }
 
     .terminal-header {
       padding: 12px 14px;
       border-bottom: 1px solid var(--border);
-      background: rgba(22, 39, 61, 0.9);
+      background: rgba(20, 38, 58, 0.9);
       font-weight: 700;
       letter-spacing: 0.04em;
     }
 
     .terminal-output {
       flex: 1;
-      background: #020b11;
-      padding: 12px 12px;
+      background: #02090d;
+      padding: 12px;
       overflow: auto;
       font-family: Consolas, Monaco, monospace;
       font-size: 12.5px;
@@ -309,20 +260,33 @@ TEMPLATE = """
     .terminal-input-wrap {
       padding: 12px;
       border-top: 1px solid var(--border);
-      background: rgba(22, 39, 61, 0.9);
+      background: rgba(20, 38, 58, 0.9);
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 78px;
+      resize: vertical;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: #0d1723;
+      color: var(--text);
+      padding: 10px 12px;
+      font-family: Consolas, Monaco, monospace;
+      font-size: 14px;
     }
 
     .send-btn {
       margin-top: 10px;
-      background: linear-gradient(135deg, var(--blue), #297ad9);
+      background: linear-gradient(135deg, var(--accent-2), #2d78d8);
       color: white;
-      font-weight: 700;
-      box-shadow: 0 12px 22px rgba(74, 167, 255, 0.28);
+      border: none;
+      box-shadow: 0 12px 22px rgba(78, 162, 255, 0.28);
     }
 
-    @media (max-width: 1100px) {
+    @media (max-width: 900px) {
       .controls {
-        grid-template-columns: repeat(2, minmax(140px, 1fr));
+        grid-template-columns: 1fr;
       }
 
       .terminal-grid {
@@ -333,24 +297,6 @@ TEMPLATE = """
         min-height: 420px;
       }
     }
-
-    @media (max-width: 520px) {
-      .container {
-        padding: 12px 10px 30px;
-      }
-
-      .controls {
-        grid-template-columns: 1fr;
-      }
-
-      .topbar {
-        padding: 12px;
-      }
-
-      button, input, select, textarea {
-        font-size: 16px;
-      }
-    }
   </style>
 </head>
 <body>
@@ -358,36 +304,13 @@ TEMPLATE = """
     <form id="run-all-form" class="topbar">
       <div class="controls">
         <div class="control-group">
-          <label for="ip">IP</label>
-          <input id="ip" name="ip" type="text" value="127.0.0.1">
-        </div>
-
-        <div class="control-group">
-          <label for="level">Level</label>
-          <select id="level" name="level">
-            <option value="l7">l7</option>
-            <option value="l4">l4</option>
-          </select>
-        </div>
-
-        <div class="control-group">
-          <label for="method">Method</label>
-          <input id="method" name="method" type="text" value="default">
+          <label for="ip">Target IP Address</label>
+          <input id="ip" name="ip" type="text" value="127.0.0.1" placeholder="127.0.0.1">
         </div>
 
         <div class="control-group">
           <label for="threads">Threads</label>
           <input id="threads" name="threads" type="number" min="1" value="1">
-        </div>
-
-        <div class="control-group">
-          <label for="interval">Interval</label>
-          <input id="interval" name="interval" type="number" min="1" value="1">
-        </div>
-
-        <div class="control-group">
-          <label for="sleep">Sleep</label>
-          <input id="sleep" name="sleep" type="number" min="1" value="1">
         </div>
 
         <div class="control-group">
@@ -402,8 +325,8 @@ TEMPLATE = """
         <div class="terminal-header">Terminal 1</div>
         <div class="terminal-output" id="terminal-output-terminal_1"></div>
         <div class="terminal-input-wrap">
-          <textarea id="input-terminal_1" placeholder="Type any Linux command..."></textarea>
-          <button class="send-btn" data-terminal-id="terminal_1">Send Command</button>
+          <textarea id="input-terminal_1" placeholder="Type any Linux command here..."></textarea>
+          <button class="send-btn" data-terminal-id="terminal_1">Send</button>
         </div>
       </div>
 
@@ -411,8 +334,8 @@ TEMPLATE = """
         <div class="terminal-header">Terminal 2</div>
         <div class="terminal-output" id="terminal-output-terminal_2"></div>
         <div class="terminal-input-wrap">
-          <textarea id="input-terminal_2" placeholder="Type any Linux command..."></textarea>
-          <button class="send-btn" data-terminal-id="terminal_2">Send Command</button>
+          <textarea id="input-terminal_2" placeholder="Type any Linux command here..."></textarea>
+          <button class="send-btn" data-terminal-id="terminal_2">Send</button>
         </div>
       </div>
 
@@ -420,8 +343,8 @@ TEMPLATE = """
         <div class="terminal-header">Terminal 3</div>
         <div class="terminal-output" id="terminal-output-terminal_3"></div>
         <div class="terminal-input-wrap">
-          <textarea id="input-terminal_3" placeholder="Type any Linux command..."></textarea>
-          <button class="send-btn" data-terminal-id="terminal_3">Send Command</button>
+          <textarea id="input-terminal_3" placeholder="Type any Linux command here..."></textarea>
+          <button class="send-btn" data-terminal-id="terminal_3">Send</button>
         </div>
       </div>
     </div>
