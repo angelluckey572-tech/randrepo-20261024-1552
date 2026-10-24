@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     sudo \
     ca-certificates \
+    procps \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -s /bin/bash go \
@@ -17,13 +18,16 @@ RUN useradd -m -s /bin/bash go \
     && chmod 0440 /etc/sudoers.d/go
 
 WORKDIR /app
+
 COPY requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
+
 COPY . .
 
 RUN chown -R go:go /app
 
 USER go
+
 EXPOSE 10000
 
-CMD ["gunicorn", "--bind", "0.0.0.0:10000", "app:app"]
+CMD ["gunicorn", "--worker-class", "eventlet", "-w", "1", "--bind", "0.0.0.0:10000", "app:app"]
