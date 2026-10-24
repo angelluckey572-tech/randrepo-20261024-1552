@@ -28,19 +28,21 @@ def get_or_create_terminal(terminal_id):
             session = {"child": child}
             TERMINAL_SESSIONS[terminal_id] = session
 
-            thread = threading.Thread(target=_terminal_reader, args=(terminal_id,), daemon=True)
-            thread.start()
-            session["reader_thread"] = thread
+            reader = threading.Thread(target=_terminal_reader, args=(terminal_id,), daemon=True)
+            reader.start()
+            session["reader_thread"] = reader
 
         return TERMINAL_SESSIONS[terminal_id]["child"]
 
 
 def _terminal_reader(terminal_id):
     child = TERMINAL_SESSIONS[terminal_id]["child"]
+
     while True:
         try:
             if not child.isalive():
                 break
+
             data = child.read_nonblocking(size=8192, timeout=0.2)
             if data:
                 socketio.emit(
@@ -63,7 +65,11 @@ def handle_join_terminal(data):
     terminal_id = data.get("terminal_id", "terminal_1")
     join_room(terminal_id)
     get_or_create_terminal(terminal_id)
-    emit("terminal_output", {"terminal_id": terminal_id, "data": f"\n[Connected to {terminal_id}]\n"}, room=terminal_id)
+    emit(
+        "terminal_output",
+        {"terminal_id": terminal_id, "data": f"\n[Connected to {terminal_id}]\n"},
+        room=terminal_id,
+    )
 
 
 @socketio.on("terminal_input")
@@ -71,6 +77,7 @@ def handle_terminal_input(data):
     terminal_id = data.get("terminal_id", "terminal_1")
     text = data.get("input", "")
     child = get_or_create_terminal(terminal_id)
+
     if child and child.isalive():
         child.send(text)
         emit("terminal_output", {"terminal_id": terminal_id, "data": text}, room=terminal_id)
@@ -86,7 +93,14 @@ def handle_clear_terminal(data):
 
 def run_terminal_sequence(terminal_id, payload):
     child = get_or_create_terminal(terminal_id)
-    emit("terminal_output", {"terminal_id": terminal_id, "data": f"\n[Automation started on {terminal_id}] [IP={payload.get('ip','')}] \n"}, room=terminal_id)
+    emit(
+        "terminal_output",
+        {
+            "terminal_id": terminal_id,
+            "data": f"\n[Automation started on {terminal_id}] [IP={payload.get('ip', '')}] \n",
+        },
+        room=terminal_id,
+    )
 
     try:
         child.sendline("sudo rst")
@@ -115,9 +129,18 @@ def run_terminal_sequence(terminal_id, payload):
         child.sendline("y")
         time.sleep(2)
 
-        emit("terminal_output", {"terminal_id": terminal_id, "data": f"\n[Automation finished on {terminal_id}]\n"}, room=terminal_id)
+        emit(
+            "terminal_output",
+            {"terminal_id": terminal_id, "data": f"\n[Automation finished on {terminal_id}]\n"},
+            room=terminal_id,
+        )
+
     except Exception as exc:
-        emit("terminal_output", {"terminal_id": terminal_id, "data": f"\n[Automation error on {terminal_id}: {exc}]\n"}, room=terminal_id)
+        emit(
+            "terminal_output",
+            {"terminal_id": terminal_id, "data": f"\n[Automation error on {terminal_id}: {exc}]\n"},
+            room=terminal_id,
+        )
 
 
 def trigger_all_automations(payload):
@@ -150,129 +173,183 @@ TEMPLATE = """
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Parallel Terminal Control</title>
+  <title>Mobile Terminal Dashboard</title>
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
   <style>
     :root {
-      --bg: #0b1020;
-      --panel: #121a2b;
-      --panel-alt: #172235;
-      --border: #2d3c5f;
-      --text: #edf2ff;
-      --muted: #a3b4d4;
-      --accent: #32d583;
-      --accent-2: #4fb1ff;
-      --danger: #ff6c6c;
+      --bg: #07111d;
+      --panel: #111c2d;
+      --panel-2: #16273d;
+      --border: #294160;
+      --text: #eaf2ff;
+      --muted: #a8bddb;
+      --green: #2ed27a;
+      --blue: #4aa7ff;
       --shadow: rgba(0,0,0,0.35);
     }
+
     * { box-sizing: border-box; }
-    body {
+
+    html, body {
       margin: 0;
-      background: linear-gradient(180deg, #070d19 0%, var(--bg) 100%);
-      color: var(--text);
+      padding: 0;
       font-family: Arial, sans-serif;
+      background: linear-gradient(180deg, #050d16 0%, var(--bg) 100%);
+      color: var(--text);
     }
+
+    body {
+      min-height: 100vh;
+    }
+
     .container {
-      max-width: 1500px;
+      width: min(1500px, 100%);
       margin: 0 auto;
-      padding: 22px 18px 40px;
+      padding: 18px 14px 40px;
     }
+
     .topbar {
-      background: rgba(18,26,43,0.9);
+      background: rgba(17, 28, 45, 0.92);
       border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 18px 20px;
-      box-shadow: 0 10px 26px var(--shadow);
-      margin-bottom: 18px;
+      border-radius: 16px;
+      padding: 14px;
+      box-shadow: 0 10px 28px var(--shadow);
+      margin-bottom: 16px;
     }
+
     .controls {
       display: grid;
-      grid-template-columns: repeat(7, minmax(120px, 1fr));
-      gap: 12px;
+      grid-template-columns: repeat(7, minmax(110px, 1fr));
+      gap: 10px;
       align-items: end;
     }
+
     .control-group {
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 6px;
     }
+
     label {
-      font-size: 12px;
+      font-size: 11px;
       text-transform: uppercase;
       letter-spacing: 0.08em;
       color: var(--muted);
     }
-    input, select, button {
+
+    input, select, button, textarea {
       width: 100%;
-      border: 1px solid var(--border);
-      background: var(--panel-alt);
-      color: var(--text);
       border-radius: 10px;
-      padding: 10px 12px;
-      font-size: 14px;
+      border: 1px solid var(--border);
+      background: var(--panel-2);
+      color: var(--text);
+      padding: 12px 12px;
+      font-size: 15px;
     }
+
+    input, select {
+      min-height: 46px;
+    }
+
+    textarea {
+      min-height: 82px;
+      resize: vertical;
+      font-family: Consolas, Monaco, monospace;
+      font-size: 13px;
+    }
+
     button {
-      background: linear-gradient(135deg, var(--accent), #1aa66b);
+      min-height: 46px;
+      background: linear-gradient(135deg, var(--green), #1cad66);
       border: none;
-      color: #06120d;
+      color: #06150d;
       font-weight: 700;
+      font-size: 15px;
       cursor: pointer;
-      min-height: 42px;
-      box-shadow: 0 10px 20px rgba(50, 213, 131, 0.25);
+      box-shadow: 0 12px 24px rgba(46, 210, 122, 0.3);
     }
+
     .terminal-grid {
       display: grid;
-      grid-template-columns: repeat(3, minmax(280px, 1fr));
-      gap: 18px;
+      grid-template-columns: repeat(3, minmax(260px, 1fr));
+      gap: 16px;
     }
+
     .terminal {
-      display: flex;
-      flex-direction: column;
-      min-height: 520px;
-      background: rgba(18,26,43,0.88);
+      background: rgba(17, 28, 45, 0.92);
       border: 1px solid var(--border);
       border-radius: 16px;
       overflow: hidden;
-      box-shadow: 0 12px 28px var(--shadow);
+      min-height: 500px;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 10px 24px var(--shadow);
     }
+
     .terminal-header {
-      padding: 12px 16px;
+      padding: 12px 14px;
       border-bottom: 1px solid var(--border);
-      background: rgba(23,34,53,0.9);
+      background: rgba(22, 39, 61, 0.9);
       font-weight: 700;
       letter-spacing: 0.04em;
     }
+
     .terminal-output {
       flex: 1;
-      padding: 14px;
+      background: #020b11;
+      padding: 12px 12px;
       overflow: auto;
-      background: #02070f;
-      font-family: "Consolas", "Monaco", monospace;
-      font-size: 13px;
-      line-height: 1.45;
+      font-family: Consolas, Monaco, monospace;
+      font-size: 12.5px;
+      line-height: 1.5;
       white-space: pre-wrap;
       word-break: break-word;
     }
+
     .terminal-input-wrap {
-      border-top: 1px solid var(--border);
       padding: 12px;
-      background: rgba(23,34,53,0.9);
+      border-top: 1px solid var(--border);
+      background: rgba(22, 39, 61, 0.9);
     }
-    textarea {
-      width: 100%;
-      min-height: 72px;
-      resize: vertical;
-      background: #0c1220;
-      color: var(--text);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 10px;
-      font-family: "Consolas", "Monaco", monospace;
-      font-size: 13px;
+
+    .send-btn {
+      margin-top: 10px;
+      background: linear-gradient(135deg, var(--blue), #297ad9);
+      color: white;
+      font-weight: 700;
+      box-shadow: 0 12px 22px rgba(74, 167, 255, 0.28);
     }
+
     @media (max-width: 1100px) {
-      .controls { grid-template-columns: repeat(2, minmax(160px, 1fr)); }
-      .terminal-grid { grid-template-columns: 1fr; }
+      .controls {
+        grid-template-columns: repeat(2, minmax(140px, 1fr));
+      }
+
+      .terminal-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .terminal {
+        min-height: 420px;
+      }
+    }
+
+    @media (max-width: 520px) {
+      .container {
+        padding: 12px 10px 30px;
+      }
+
+      .controls {
+        grid-template-columns: 1fr;
+      }
+
+      .topbar {
+        padding: 12px;
+      }
+
+      button, input, select, textarea {
+        font-size: 16px;
+      }
     }
   </style>
 </head>
@@ -281,9 +358,10 @@ TEMPLATE = """
     <form id="run-all-form" class="topbar">
       <div class="controls">
         <div class="control-group">
-          <label for="ip">IP Address</label>
+          <label for="ip">IP</label>
           <input id="ip" name="ip" type="text" value="127.0.0.1">
         </div>
+
         <div class="control-group">
           <label for="level">Level</label>
           <select id="level" name="level">
@@ -291,22 +369,27 @@ TEMPLATE = """
             <option value="l4">l4</option>
           </select>
         </div>
+
         <div class="control-group">
           <label for="method">Method</label>
           <input id="method" name="method" type="text" value="default">
         </div>
+
         <div class="control-group">
           <label for="threads">Threads</label>
           <input id="threads" name="threads" type="number" min="1" value="1">
         </div>
+
         <div class="control-group">
           <label for="interval">Interval</label>
           <input id="interval" name="interval" type="number" min="1" value="1">
         </div>
+
         <div class="control-group">
           <label for="sleep">Sleep</label>
           <input id="sleep" name="sleep" type="number" min="1" value="1">
         </div>
+
         <div class="control-group">
           <label>&nbsp;</label>
           <button type="submit">RUN ALL 3 SIMULTANEOUSLY</button>
@@ -319,7 +402,8 @@ TEMPLATE = """
         <div class="terminal-header">Terminal 1</div>
         <div class="terminal-output" id="terminal-output-terminal_1"></div>
         <div class="terminal-input-wrap">
-          <textarea id="input-terminal_1" placeholder="Type commands here and press Ctrl+Enter"></textarea>
+          <textarea id="input-terminal_1" placeholder="Type any Linux command..."></textarea>
+          <button class="send-btn" data-terminal-id="terminal_1">Send Command</button>
         </div>
       </div>
 
@@ -327,7 +411,8 @@ TEMPLATE = """
         <div class="terminal-header">Terminal 2</div>
         <div class="terminal-output" id="terminal-output-terminal_2"></div>
         <div class="terminal-input-wrap">
-          <textarea id="input-terminal_2" placeholder="Type commands here and press Ctrl+Enter"></textarea>
+          <textarea id="input-terminal_2" placeholder="Type any Linux command..."></textarea>
+          <button class="send-btn" data-terminal-id="terminal_2">Send Command</button>
         </div>
       </div>
 
@@ -335,7 +420,8 @@ TEMPLATE = """
         <div class="terminal-header">Terminal 3</div>
         <div class="terminal-output" id="terminal-output-terminal_3"></div>
         <div class="terminal-input-wrap">
-          <textarea id="input-terminal_3" placeholder="Type commands here and press Ctrl+Enter"></textarea>
+          <textarea id="input-terminal_3" placeholder="Type any Linux command..."></textarea>
+          <button class="send-btn" data-terminal-id="terminal_3">Send Command</button>
         </div>
       </div>
     </div>
@@ -353,7 +439,7 @@ TEMPLATE = """
     }
 
     socket.on("connect", () => {
-      ["terminal_1", "terminal_2", "terminal_3"].forEach((id) => {
+      ["terminal_1", "terminal_2", "terminal_3"].forEach(id => {
         socket.emit("join_terminal", { terminal_id: id });
       });
     });
@@ -362,14 +448,28 @@ TEMPLATE = """
       appendOutput(terminal_id, data);
     });
 
-    document.querySelectorAll("textarea").forEach((textarea) => {
+    function sendManualCommand(terminalId) {
+      const textarea = document.getElementById("input-" + terminalId);
+      const value = (textarea.value || "").trim();
+      if (!value) return;
+
+      const payload = value + "\\n";
+      textarea.value = "";
+      socket.emit("terminal_input", { terminal_id: terminalId, input: payload });
+    }
+
+    document.querySelectorAll(".send-btn").forEach(button => {
+      button.addEventListener("click", () => {
+        sendManualCommand(button.dataset.terminalId);
+      });
+    });
+
+    document.querySelectorAll("textarea").forEach(textarea => {
       textarea.addEventListener("keydown", (event) => {
         if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
           event.preventDefault();
           const terminalId = textarea.id.replace("input-", "");
-          const value = textarea.value;
-          textarea.value = "";
-          socket.emit("terminal_input", { terminal_id: terminalId, input: value + "\\n" });
+          sendManualCommand(terminalId);
         }
       });
     });
@@ -377,10 +477,14 @@ TEMPLATE = """
     document.getElementById("run-all-form").addEventListener("submit", function(e) {
       e.preventDefault();
       const formData = new FormData(this);
-      fetch("/run-all", { method: "POST", body: formData })
-        .then((r) => r.json())
-        .then((data) => console.log(data))
-        .catch((err) => console.error(err));
+
+      fetch("/run-all", {
+        method: "POST",
+        body: formData
+      })
+      .then(response => response.json())
+      .then(data => console.log(data))
+      .catch(err => console.error(err));
     });
   </script>
 </body>
