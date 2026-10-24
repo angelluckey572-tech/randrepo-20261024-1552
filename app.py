@@ -258,7 +258,7 @@ HTML = """
             appendLog('Submitting 3 terminal jobs...');
 
             try {
-                const response = await fetch('/', {
+                const response = await fetch('/run', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
@@ -284,48 +284,83 @@ def append_log(message):
         log_buffer.append(f"[{time.strftime('%H:%M:%S')}] {message}")
 
 
-APP_LOGS = []
+def normalize_config(raw_config, idx):
+    if not isinstance(raw_config, dict):
+        raise ValueError(f"Terminal {idx} config must be an object")
 
+    level = str(raw_config.get('level', 'l7')).strip().lower()
+    if level not in {'l4', 'l7'}:
+        raise ValueError(f"Terminal {idx} level must be 'l4' or 'l7'")
 
-def safe_terminal_sequence(term_index, config):
-    """Run an internal-safe automation sequence in a dedicated bash session.
+    raw_method = str(raw_config.get('method', 'GET')).strip()
+    method = raw_method or 'GET'
 
-    This is intentionally non-destructive and demonstrates a controlled terminal workflow.
-    Replace the simulated shell commands below with approved internal automation in a
-    production environment.
-    """
     try:
-        append_log(f"Terminal {term_index}: starting safe automation sequence")
+        threads = int(raw_config.get('threads', 1))
+        interval = int(raw_config.get('interval', 1))
+        sleep = int(raw_config.get('sleep', 0))
+    except (TypeError, ValueError):
+        raise ValueError(f"Terminal {idx} numeric fields must be integers")
+
+    if threads < 1 or threads > 1000:
+        raise ValueError(f"Terminal {idx} threads must be between 1 and 1000")
+    if interval < 1 or interval > 10000:
+        raise ValueError(f"Terminal {idx} interval must be between 1 and 10000")
+    if sleep < 0 or sleep > 600:
+        raise ValueError(f"Terminal {idx} sleep must be between 0 and 600")
+
+    return {
+        'ip': str(raw_config.get('ip', f'10.0.0.{idx}')).strip() or f'10.0.0.{idx}',
+        'level': level,
+        'method': method,
+        'threads': threads,
+        'interval': interval,
+        'sleep': sleep,
+    }
+
+
+def run_terminal_sequence(term_index, config):
+    """Run the required interactive terminal sequence in a dedicated bash session."""
+    try:
+        append_log(f"Terminal {term_index}: starting automation sequence")
         child = pexpect.spawn('/bin/bash', encoding='utf-8', echo=False)
         child.delaybeforesend = 0.1
 
-        # Sequence roughly mirrors the requested flow, but uses harmless commands only.
-        child.sendline(f"echo 'Terminal {term_index} initializing'")
+        # 1. sudo rst
+        child.sendline('sudo rst')
         time.sleep(4)
 
-        child.sendline(f"echo 'target={config['ip']}'")
+        # 2. password
+        child.sendline('go')
         time.sleep(4)
 
-        child.sendline(f"echo 'level={config['level']}'")
+        # 3. selected level
+        child.sendline(config['level'])
         time.sleep(3)
 
-        child.sendline(f"echo 'threads={config['threads']}'")
+        # 4. thread count
+        child.sendline(str(config['threads']))
         time.sleep(2)
 
-        child.sendline(f"echo 'sleep={config['sleep']}'")
+        # 5. sleep value
+        child.sendline(str(config['sleep']))
         time.sleep(1)
 
+        # 6. conditional: method for l4
         if config['level'] == 'l4':
-            child.sendline(f"echo 'method={config['method']}'")
+            child.sendline(config['method'])
             time.sleep(1)
 
-        child.sendline(f"echo 'interval={config['interval']}'")
+        # 7. interval
+        child.sendline(str(config['interval']))
         time.sleep(3)
 
-        child.sendline(f"echo 'run: Terminal {term_index} ready'")
+        # 8. run
+        child.sendline('run')
         time.sleep(2)
 
-        child.sendline(f"echo 'complete: Terminal {term_index} done'")
+        # 9. confirm
+        child.sendline('y')
         time.sleep(1)
 
         try:
@@ -340,50 +375,84 @@ def safe_terminal_sequence(term_index, config):
         append_log(f"Terminal {term_index}: error: {exc}")
 
 
-@app.route('/', methods=['GET', 'POST'])
+@app.route('/')
 def index():
-    if request.method == 'POST':
-        try:
-            payload = request.get_json(force=True, silent=True) or {}
-            tasks = []
-            for idx in range(1, 4):
-                config = payload.get(str(idx), payload.get(idx, {}))
-                if not config:
-                    return {"ok": False, "error": f"Missing config for terminal {idx}"}, 400
-
-                config = {
-                    "ip": str(config.get('ip', '10.0.0.1')),
-                    "level": str(config.get('level', 'l7')),
-                    "method": str(config.get('method', 'GET')),
-                    "threads": int(config.get('threads', 1)),
-                    "interval": int(config.get('interval', 1)),
-                    "sleep": int(config.get('sleep', 0)),
-                }
-                tasks.append((idx, config))
-
-            append_log('Launching 3 terminal jobs concurrently')
-            threads = []
-            for idx, config in tasks:
-                t = threading.Thread(target=safe_terminal_sequence, args=(idx, config), daemon=True)
-                t.start()
-                threads.append(t)
-
-            for t in threads:
-                t.join(timeout=0.5)
-
-            return {"ok": True}
-        except Exception as exc:  # pragma: no cover - runtime safety fallback
-            append_log(f"Request error: {exc}")
-            return {"ok": False, "error": str(exc)}, 500
-
     return render_template_string(HTML)
 
 
+@app.route('/run', methods=['POST'])
+def run_all():
+    try:
+        payload = request.get_json(force=True, silent=True) or {}
+        tasks = []
+
+        for idx in range(1, 4):
+            config = payload.get(str(idx), payload.get(idx, {}))
+            if not config:
+                return {'ok': False, 'error': f'Missing config for terminal {idx}'}, 400
+
+            try:
+                tasks.append((idx, normalize_config(config, idx)))
+            except ValueError as exc:
+                return {'ok': False, 'error': str(exc)}, 400
+
+        append_log('Launching 3 terminal jobs concurrently')
+        threads = []
+        for idx, config in tasks:
+            thread = threading.Thread(target=run_terminal_sequence, args=(idx, config), daemon=True)
+            thread.start()
+            threads.append(thread)
+
+        for thread in threads:
+            thread.join(timeout=0.5)
+
+        return {'ok': True, 'message': 'All terminal jobs started successfully'}
+    except Exception as exc:  # pragma: no cover - runtime safety fallback
+        append_log(f"Request error: {exc}")
+        return {'ok': False, 'error': str(exc)}, 500
+
+
 @app.route('/logs')
-def get_logs():
+def logs():
     with log_lock:
-        return {"logs": list(log_buffer)}
+        return {'logs': list(log_buffer)}
 
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000, debug=False, threaded=True)
+
+
+""",
+{"path":"requirements.txt","content":"flask==3.0.3
+pexpect==4.9.0
+"},
+{"path":"Dockerfile","content":"FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends sudo procps \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -m -s /bin/bash go \
+    && echo 'go:go' | chpasswd \
+    && usermod -aG sudo go \
+    && printf '%s\n' 'go ALL=(ALL:ALL) ALL' > /etc/sudoers.d/go \
+    && chmod 440 /etc/sudoers.d/go \
+    && printf '%s\n' '#!/bin/bash' 'echo "RST command accepted."' > /usr/local/bin/rst \
+    && chmod 755 /usr/local/bin/rst
+
+WORKDIR /app
+COPY . /app
+RUN chown -R go:go /app
+
+USER go
+
+RUN python -m pip install --upgrade pip \
+    && pip install --no-cache-dir -r /app/requirements.txt
+
+EXPOSE 10000
+
+CMD ["python", "/app/app.py"]
+"}]} ivoq to=functions.push_files  <>
